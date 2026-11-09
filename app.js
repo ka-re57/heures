@@ -384,7 +384,7 @@ function afficherAlertes() {
   var z = $("alertes"); z.innerHTML = "";
   var vu = salarieVu(); if (!vu) return;
   var n = aValider(vu);
-  if (n) z.appendChild(el("button", { type: "button", class: "alerte jaune lien", onclick: function () { listeAValider(vu); } },
+  if (n) z.appendChild(el("button", { type: "button", class: "alerte jaune lien", onclick: function () { if (aValiderJours(vu).length) validerSuivant(vu); else listeAValider(vu); } },
     [n === 1 ? "1 élément attend ta validation" : n + " éléments attendent ta validation", el("span", { text: "Voir ›" })]));
   var att = lire("attente", []);
   if (att.length) z.appendChild(el("div", { class: "alerte bleu", text: att.length + " envoi(s) en attente de réseau. Ils partiront tout seuls." }));
@@ -423,7 +423,7 @@ function avisReponses(sal) {
 function listeAValider(sal) {
   var feuille = $("feuille"); feuille.innerHTML = "";
   feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: "À valider" }),
-    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermerManuel }, ["✕"])]));
   var l = el("div", { class: "liste" });
   S.heures.filter(function (h) {
     return rel(h, "Salarié").indexOf(sal.id) >= 0 && sel(h, "Validation") === "En attente" && sel(h, "Modifié par") !== role();
@@ -469,15 +469,24 @@ function afficherSemaine() {
   var travailles = js.filter(function (j) { return iso(plusJours(l, 4)) >= j.date && !j.horsContrat; });
   var confS = travailles.length && travailles.every(function (j) { return j.confS; });
   var confP = travailles.length && travailles.every(function (j) { return j.confP; });
-  var enAttente = js.filter(function (j) { return j.rec && j.validation === "En attente"; }).length;
+  var aMoi = js.filter(function (j) { return j.rec && j.validation === "En attente" && j.modifiePar !== role(); }).length;
+  var chezLautre = js.filter(function (j) { return j.rec && j.validation === "En attente" && j.modifiePar === role(); }).length;
   var maConf = estPatron() ? confP : confS;
   var c = el("div", { class: "confirm" });
   c.appendChild(el("p", { class: "signes", text: "Salarié : " + (confS ? "semaine confirmée ✓" : "pas encore confirmée") + " · Patron : " + (confP ? "semaine confirmée ✓" : "pas encore confirmée") }));
   var vendredi = plusJours(l, 4);
   if (!maConf && travailles.length && new Date() >= new Date(vendredi.getFullYear(), vendredi.getMonth(), vendredi.getDate(), 12)) {
-    var b = el("button", { type: "button", class: "btn", text: enAttente ? "Il reste " + enAttente + " journée(s) à valider" : "Je confirme la semaine", disabled: enAttente ? "disabled" : null });
-    b.addEventListener("click", function () { confirmerSemaine(sal, js, b); });
-    c.appendChild(b);
+    if (aMoi) {
+      var bv = el("button", { type: "button", class: "btn", text: (aMoi === 1 ? "Il reste 1 journée à valider" : "Il reste " + aMoi + " journées à valider") + " ›" });
+      bv.addEventListener("click", function () { validerSuivant(sal); });
+      c.appendChild(bv);
+    } else if (chezLautre) {
+      c.appendChild(el("button", { type: "button", class: "btn", disabled: "disabled", text: chezLautre + " journée(s) en attente " + autreDu() }));
+    } else {
+      var b = el("button", { type: "button", class: "btn", text: "Je confirme la semaine" });
+      b.addEventListener("click", function () { confirmerSemaine(sal, js, b); });
+      c.appendChild(b);
+    }
   }
   v.appendChild(c);
 }
@@ -490,13 +499,14 @@ function changerSemaine(n) {
 
 /* ---------- édition d'une journée ---------- */
 var STATUTS = ["Travaillé", "CFA", "Congé", "Sans solde", "Malade", "Arrêt", "Intempérie", "Férié", "Repos"];
-function ouvrirJour(sal, date) {
+function ouvrirJour(sal, date, restants) {
   var j = journee(sal, date), d = versDate(date);
   var f = { statut: j.statut, arrivee: j.arrivee || (j.prevu ? j.prevu.arrivee : "08:30"), depart: j.depart || (j.prevu ? j.prevu.depart : "17:30"),
     pause: j.pause, chantiers: j.chantiers || "", commentaire: j.commentaire || "", panier: j.panier, zone: j.zone };
   var feuille = $("feuille"); feuille.innerHTML = "";
   feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: JOURS_LONGS[d.getDay()] + " " + joli(d) }),
-    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermerManuel }, ["✕"])]));
+  if (restants > 1) feuille.appendChild(el("p", { class: "note", text: "Encore " + (restants - 1) + " autre(s) journée(s) à valider après celle-ci." }));
   if (j.ferie) feuille.appendChild(el("div", { class: "alerte bleu", text: "Jour férié : " + j.ferie }));
   if (j.absence && !j.rec) feuille.appendChild(el("div", { class: "alerte bleu", text: sel(j.absence, "Type") + " (" + sel(j.absence, "Statut") + ")" }));
 
@@ -614,21 +624,51 @@ function enregistrerJour(sal, j, f, bouton) {
 }
 
 function decider(j, decision, bouton) {
+  var rec = j.rec, sal = salarieVu();
+  /* Après la réponse : on met la journée à jour dans le téléphone tout de suite,
+     puis on enchaîne sur la suivante à valider (si on est parti de la liste). */
+  function suite(motif) {
+    return function () {
+      rec.properties["Validation"] = { select: { name: decision } };
+      rec.properties["Motif"] = { rich_text: motif ? [{ plain_text: motif }] : [] };
+      if (S.enchainer) validerSuivant(sal); else { fermer(); afficher(); }
+    };
+  }
   if (decision === "Validé") {
-    envoyer({ base: "heures", page_id: j.rec.id, props: { "Validation": N.choix("Validé"), "Motif": N.texte("") } }, bouton,
-      "Journée validée. " + (estPatron() ? "Le salarié" : "Le patron") + " est prévenu.");
+    envoyer({ base: "heures", page_id: rec.id, props: { "Validation": N.choix("Validé"), "Motif": N.texte("") } }, bouton,
+      "Journée validée. " + (estPatron() ? "Le salarié" : "Le patron") + " est prévenu.", suite(""));
     return;
   }
   demanderMotif("Pourquoi tu refuses ?", function (motif) {
-    envoyer({ base: "heures", page_id: j.rec.id, props: { "Validation": N.choix("Refusé"), "Motif": N.texte(motif) } }, null,
-      "Modification refusée. " + (estPatron() ? "Le salarié" : "Le patron") + " verra ton motif.");
+    envoyer({ base: "heures", page_id: rec.id, props: { "Validation": N.choix("Refusé"), "Motif": N.texte(motif) } }, null,
+      "Modification refusée. " + (estPatron() ? "Le salarié" : "Le patron") + " verra ton motif.", suite(motif));
   });
 }
+/* Journées que JE dois valider (modifiées par l'autre), de la plus ancienne à la plus récente. */
+function aValiderJours(sal) {
+  return S.heures.filter(function (h) {
+    return rel(h, "Salarié").indexOf(sal.id) >= 0 && sel(h, "Validation") === "En attente" && sel(h, "Modifié par") !== role();
+  }).map(function (h) { return (dateDe(h, "Date") || {}).debut; }).filter(Boolean).sort();
+}
+/* Ouvre la première journée à valider ; une fois répondu, la suivante ; et ainsi de suite. */
+function validerSuivant(sal) {
+  var jours = aValiderJours(sal);
+  if (jours.length) {
+    S.enchainer = true; S.onglet = "semaine"; S.semaine = lundi(versDate(jours[0]));
+    afficher(); ouvrirJour(sal, jours[0], jours.length);
+    return;
+  }
+  var conges = estPatron() ? S.conges.filter(function (c) { return rel(c, "Salarié").indexOf(sal.id) >= 0 && sel(c, "Statut") === "Demandé"; }) : [];
+  S.enchainer = false; fermer();
+  if (conges.length) { S.onglet = "conges"; afficher(); toast("Journées à jour. Il reste " + conges.length + " demande(s) de congé ou d'absence ici.", "ok"); }
+  else { afficher(); toast("Tout est validé ✓", "ok"); }
+}
+function fermerManuel() { S.enchainer = false; fermer(); }
 /* Petite fenêtre qui demande le motif d'un refus (obligatoire). */
 function demanderMotif(titre, suite) {
   var feuille = $("feuille"); feuille.innerHTML = "";
   feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: titre }),
-    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermerManuel }, ["✕"])]));
   var t = el("textarea", { placeholder: "Ex. : on a fini à 17h, pas à 18h" });
   feuille.appendChild(el("label", { class: "champ" }, [el("span", { text: "Motif (il sera affiché à l'autre)" }), t]));
   var b = el("button", { type: "button", class: "btn rouge", text: "Envoyer le refus" });
@@ -675,13 +715,13 @@ function etatBouton(b, etat, texte) {
   b.disabled = etat === "envoi";
   if (texte) b.textContent = texte;
 }
-function envoyer(e, bouton, message) {
+function envoyer(e, bouton, message, apres) {
   etatBouton(bouton, "envoi", "Envoi en cours…");
   return appel({ action: "ecrire", base: e.base, page_id: e.page_id, props: JSON.stringify(e.props) }).then(function (r) {
     etatBouton(bouton, "fait", "Enregistré ✓");
     toast(message, "ok");
-    setTimeout(fermer, 700);
-    return chargerHeures(S.semaine).then(afficher, afficher);
+    if (apres) setTimeout(apres, 600); else setTimeout(fermer, 700);
+    return chargerHeures(S.semaine).then(function () { afficher(); }, afficher);
   }).catch(function (err) {
     if (err && err.refus) { etatBouton(bouton, "raté", "Code refusé"); toast("Code refusé. Reconnecte-toi.", "ko"); return; }
     var att = lire("attente", []); att.push(e); ecrire("attente", att);
@@ -794,7 +834,7 @@ function formulaireConge(sal, typeDepart) {
   var feuille = $("feuille"); feuille.innerHTML = "";
   var titre = el("h2");
   feuille.appendChild(el("div", { class: "tete" }, [titre,
-    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermerManuel }, ["✕"])]));
   var ch = el("div", { class: "choix" });
   [[patron ? "Congé imposé" : "Congé demandé", "Congé payé"], ["Congé sans solde", "Sans solde"]].forEach(function (t) {
     var bt = el("button", { type: "button", "aria-pressed": f.type === t[0] ? "true" : "false", text: t[1] });
@@ -844,7 +884,7 @@ function formulaireAbsence(sal) {
   var f = { type: "Malade sans arrêt", debut: auj, jours: 1, commentaire: "" };
   var feuille = $("feuille"); feuille.innerHTML = "";
   feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: "Absence" }),
-    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermerManuel }, ["✕"])]));
   var ch = el("div", { class: "choix" });
   [["Malade sans arrêt", "Malade, sans arrêt"], ["Arrêt maladie", "Arrêt de travail du médecin"]].forEach(function (t) {
     var b = el("button", { type: "button", "aria-pressed": f.type === t[0] ? "true" : "false", text: t[1] });
@@ -937,7 +977,7 @@ document.querySelectorAll(".onglets button").forEach(function (b) {
   b.addEventListener("click", function () { S.onglet = b.dataset.onglet; afficher(); });
 });
 $("btnMaj").addEventListener("click", function () { toast("Mise à jour…"); rafraichir().then(function () { toast("À jour.", "ok"); }); });
-$("fond").addEventListener("click", fermer);
+$("fond").addEventListener("click", fermerManuel);
 document.addEventListener("visibilitychange", function () { if (!document.hidden) rafraichir(true); });
 window.addEventListener("online", function () { rafraichir(); });
 
