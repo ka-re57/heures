@@ -237,17 +237,31 @@ function journee(sal, date) {
   } else {
     j.validation = "Prévu"; j.modifiePar = ""; j.chantiers = ""; j.commentaire = ""; j.zone = null;
     j.confS = false; j.confP = false;
+    var ecole = st && enCFA(sal, date);
     if (fer) j.statut = "Férié";
+    else if (ecole) j.statut = "CFA";
     else if (abs) j.statut = statutAbsence(abs);
     else if (st) j.statut = "Travaillé";
     else j.statut = "Repos";
     if (j.statut === "Travaillé") {
       j.arrivee = st[0]; j.depart = st[1]; j.pause = st[2] || 0;
       j.panier = panierParDefaut(j);
+    } else if (j.statut === "CFA") {
+      j.arrivee = HORAIRE_CFA[0]; j.depart = HORAIRE_CFA[1]; j.pause = HORAIRE_CFA[2]; j.panier = false;
     } else { j.arrivee = ""; j.depart = ""; j.pause = 0; j.panier = false; }
   }
-  j.heures = j.statut === "Travaillé" ? duree(j.arrivee, j.depart, j.pause) : 0;
+  j.heures = (j.statut === "Travaillé" || j.statut === "CFA") ? duree(j.arrivee, j.depart, j.pause) : 0;
   return j;
+}
+/* Planning CFA : champ « Planning école » de la fiche salarié, au format
+   [["2026-11-16","2026-11-20"], ...]. Les jours d'école se posent tout seuls.
+   Horaires du CFA d'après la convocation : 8h30-16h30 (pause repas 1 h). */
+var HORAIRE_CFA = ["08:30", "16:30", 60];
+function planningCFA(sal) {
+  try { var p = JSON.parse(txt(sal, "Planning école") || "[]"); return Array.isArray(p) ? p : []; } catch (e) { return []; }
+}
+function enCFA(sal, date) {
+  return planningCFA(sal).some(function (x) { return date >= x[0] && date <= (x[1] || x[0]); });
 }
 /* Panier : seulement une journée complète sur chantier (pas une demi-journée
    où il mange chez lui). Réponse CAPEB du 04/11/2026. Modifiable à la main. */
@@ -305,7 +319,8 @@ function badge(j) {
 function ligneJour(sal, j) {
   var d = versDate(j.date), auj = j.date === iso(new Date());
   var detail;
-  if (j.statut === "Travaillé") detail = el("div", { class: "h" }, [horaire(j.arrivee) + " – " + horaire(j.depart),
+  if (j.statut === "CFA") detail = el("div", { class: "h" }, ["École (CFA)", el("small", { text: horaire(j.arrivee) + " – " + horaire(j.depart) + " · " + hFmt(j.heures) })]);
+  else if (j.statut === "Travaillé") detail = el("div", { class: "h" }, [horaire(j.arrivee) + " – " + horaire(j.depart),
     el("small", { text: hFmt(j.heures) + (j.pause ? " · pause " + j.pause + " min" : "") + (j.chantiers ? " · " + j.chantiers : "") })]);
   else detail = el("div", { class: "h" }, [j.statut, el("small", { text: j.ferie || (j.absence ? sel(j.absence, "Type") : "") || "" })]);
   return el("button", {
@@ -357,9 +372,38 @@ function afficherAlertes() {
   var z = $("alertes"); z.innerHTML = "";
   var vu = salarieVu(); if (!vu) return;
   var n = aValider(vu);
-  if (n) z.appendChild(el("div", { class: "alerte jaune", text: n === 1 ? "1 élément attend ta validation." : n + " éléments attendent ta validation." }));
+  if (n) z.appendChild(el("button", { type: "button", class: "alerte jaune lien", onclick: function () { listeAValider(vu); } },
+    [n === 1 ? "1 élément attend ta validation" : n + " éléments attendent ta validation", el("span", { text: "Voir ›" })]));
   var att = lire("attente", []);
   if (att.length) z.appendChild(el("div", { class: "alerte bleu", text: att.length + " envoi(s) en attente de réseau. Ils partiront tout seuls." }));
+}
+
+/* Liste de ce qui attend ma validation : un appui ouvre l'élément. */
+function listeAValider(sal) {
+  var feuille = $("feuille"); feuille.innerHTML = "";
+  feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: "À valider" }),
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+  var l = el("div", { class: "liste" });
+  S.heures.filter(function (h) {
+    return rel(h, "Salarié").indexOf(sal.id) >= 0 && sel(h, "Validation") === "En attente" && sel(h, "Modifié par") !== role();
+  }).sort(function (a, b) { return (dateDe(a, "Date") || {}).debut < (dateDe(b, "Date") || {}).debut ? -1 : 1; })
+    .forEach(function (h) {
+      var d = (dateDe(h, "Date") || {}).debut, jr = versDate(d);
+      var qui = sel(h, "Modifié par") === "Patron" ? "le patron" : sel(h, "Modifié par") === "Claude" ? "Claude" : "le salarié";
+      l.appendChild(el("button", { type: "button", class: "jour", onclick: function () {
+        fermer(); S.onglet = "semaine"; S.semaine = lundi(jr); afficher(); ouvrirJour(sal, d);
+      } }, [el("div", { class: "j" }, [JOURS_LONGS[jr.getDay()].slice(0, 3) + ".", el("small", { text: joli(jr) })]),
+        el("div", { class: "h" }, ["Journée modifiée", el("small", { text: "par " + qui })]), el("span", { class: "etat e-attente", text: "Voir" })]));
+    });
+  if (estPatron()) S.conges.filter(function (c) { return rel(c, "Salarié").indexOf(sal.id) >= 0 && sel(c, "Statut") === "Demandé"; })
+    .forEach(function (c) {
+      var p = dateDe(c, "Période") || {};
+      l.appendChild(el("button", { type: "button", class: "jour", onclick: function () { fermer(); S.onglet = "conges"; afficher(); } },
+        [el("div", { class: "j" }, ["🌴"]), el("div", { class: "h" }, [sel(c, "Type"), el("small", { text: "du " + jolis(p.debut) + " au " + jolis(p.fin) })]),
+          el("span", { class: "etat e-attente", text: "Voir" })]));
+    });
+  feuille.appendChild(l);
+  ouvrir();
 }
 
 function afficherSemaine() {

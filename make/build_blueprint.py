@@ -4,6 +4,8 @@ import json
 
 HOOK = 4501526
 CONN = 13987245
+CONN_AGENDA = 11414052  # À REMPLACER : cette connexion n'a pas le droit de lire l'agenda (403, 09/11/2026)
+AGENDA_ACTIF = False
 DB_SAL = "ecbb7b66ed4e4c4eb38d1522db2cb54c"
 DB_HEU = "7dd8ae147e89461399009a30d84a30b0"
 DB_CON = "595ba62e5d1c40e5a871853f6c3850a8"
@@ -129,6 +131,22 @@ route_modifier = {"flow": [
     respond(42, 1800, 600, '{"ok":true,"id":"{{41.body.id}}"}'),
 ]}
 
+# Agenda du patron (zones de trajet et chantiers) : réservé au profil Patron,
+# l'agenda contient les noms et adresses des clients.
+route_agenda = {"flow": [
+    {"id": 50, "module": "google-calendar:makeApiCall", "version": 5,
+     "mapper": {"url": "/v3/calendars/primary/events", "method": "GET", "headers": [], "body": "",
+                "qs": [{"key": "timeMin", "value": "{{2.debut}}T00:00:00Z"},
+                       {"key": "timeMax", "value": "{{2.fin}}T23:59:59Z"},
+                       {"key": "singleEvents", "value": "true"},
+                       {"key": "orderBy", "value": "startTime"},
+                       {"key": "maxResults", "value": "250"}]},
+     "metadata": pos(1200, 900), "parameters": {"__IMTCONN__": CONN_AGENDA},
+     "filter": flt("Agenda", USER_OK, act("agenda"), cond("{{3.body.results[1].properties.Profil.select.name}}", "text:equal", "Patron"), *DATES_OK)},
+    tojson(51, 1500, 900, "50.body.items"),
+    respond(52, 1800, 900, '{"ok":true,"agenda":{{51.json}}}'),
+]}
+
 flow = [
     {"id": 1, "module": "gateway:CustomWebHook", "version": 1, "mapper": {},
      "metadata": pos(0, 0), "parameters": {"hook": HOOK, "maxResults": 1}},
@@ -142,7 +160,7 @@ flow = [
         flt("Code", cond("{{2.code}}", "text:pattern", r"^\d{4}$"))),
     {"id": 4, "module": "builtin:BasicRouter", "version": 1, "mapper": None,
      "metadata": pos(900, 0),
-     "routes": [route_refus, route_init, route_heures, route_creer, route_modifier]},
+     "routes": [route_refus, route_init, route_heures, route_creer, route_modifier] + ([route_agenda] if AGENDA_ACTIF else [])},
 ]
 
 bp = {"name": "KA-RE - Appli heures (API)", "flow": flow,

@@ -81,6 +81,7 @@ h2{font-size:1.35rem}
 /* Alertes */
 .alerte{border-radius:12px;padding:12px 14px;font-weight:600}
 .alerte.jaune{background:var(--jaune-fond);color:var(--jaune)}
+.alerte.lien{display:flex;justify-content:space-between;align-items:center;width:100%;border:0;font:inherit;font-weight:700;cursor:pointer;text-align:left}
 .alerte.rouge{background:var(--rouge-fond);color:var(--rouge)}
 .alerte.bleu{background:var(--bleu-fond);color:var(--bleu)}
 
