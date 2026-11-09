@@ -205,6 +205,7 @@ function absenceLe(salId, date) {
 }
 function statutAbsence(c) {
   var t = sel(c, "Type");
+  if (/sans solde/.test(t)) return "Sans solde";
   if (/Arrêt/.test(t)) return "Arrêt";
   if (/Malade/.test(t)) return "Malade";
   if (/Examen/.test(t)) return "Examen";
@@ -403,7 +404,7 @@ function changerSemaine(n) {
 }
 
 /* ---------- édition d'une journée ---------- */
-var STATUTS = ["Travaillé", "CFA", "Congé", "Malade", "Arrêt", "Intempérie", "Férié", "Repos"];
+var STATUTS = ["Travaillé", "CFA", "Congé", "Sans solde", "Malade", "Arrêt", "Intempérie", "Férié", "Repos"];
 function ouvrirJour(sal, date) {
   var j = journee(sal, date), d = versDate(date);
   var f = { statut: j.statut, arrivee: j.arrivee || (j.prevu ? j.prevu.arrivee : "08:30"), depart: j.depart || (j.prevu ? j.prevu.depart : "17:30"),
@@ -612,13 +613,16 @@ function compteurConges(sal) {
     var mois = (now.getFullYear() - a.getFullYear()) * 12 + now.getMonth() - a.getMonth() - (now.getDate() < a.getDate() ? 1 : 0);
     acquis = Math.max(0, mois) * 2.5;
   }
-  var pris = 0, demandes = 0;
+  var pris = 0, demandes = 0, sansSolde = 0;
   S.conges.forEach(function (c) {
-    if (rel(c, "Salarié").indexOf(sal.id) < 0 || !/Congé/.test(sel(c, "Type"))) return;
-    if (sel(c, "Statut") === "Accordé") pris += num(c, "Jours ouvrables") || 0;
-    if (sel(c, "Statut") === "Demandé") demandes += num(c, "Jours ouvrables") || 0;
+    if (rel(c, "Salarié").indexOf(sal.id) < 0) return;
+    var t = sel(c, "Type"), st = sel(c, "Statut"), n = num(c, "Jours ouvrables") || 0;
+    if (t === "Congé sans solde") { if (st === "Accordé") sansSolde += n; return; }
+    if (t !== "Congé demandé" && t !== "Congé imposé") return;
+    if (st === "Accordé") pris += n;
+    if (st === "Demandé") demandes += n;
   });
-  return { acquis: acquis, pris: pris, demandes: demandes, reste: acquis - pris };
+  return { acquis: acquis, pris: pris, demandes: demandes, reste: acquis - pris, sansSolde: sansSolde };
 }
 
 function afficherConges() {
@@ -631,9 +635,9 @@ function afficherConges() {
     el("div", {}, [el("b", { text: String(c.pris).replace(".", ",") }), el("span", { text: "posés et accordés" })]),
     el("div", {}, [el("b", { text: String(c.reste).replace(".", ",") }), el("span", { text: "reste" })])
   ]));
-  v.appendChild(el("p", { class: "note", text: "Jours ouvrables (lundi au samedi). 2,5 jours par mois travaillé depuis l'embauche. Calcul indicatif : c'est la CIBTP qui paie et qui fait foi." }));
+  v.appendChild(el("p", { class: "note", text: "Congés payés en jours ouvrables (lundi au samedi). 2,5 jours par mois travaillé depuis l'embauche. Calcul indicatif : c'est la CIBTP qui paie et qui fait foi." + (c.sansSolde ? " Congés sans solde accordés : " + c.sansSolde + " j (non payés, ne touchent pas aux congés payés)." : "") }));
 
-  var b1 = el("button", { type: "button", class: "btn", text: estPatron() ? "Poser un congé imposé" : "Demander un congé" });
+  var b1 = el("button", { type: "button", class: "btn", text: estPatron() ? "Poser un congé" : "Demander un congé" });
   b1.addEventListener("click", function () { formulaireConge(sal, estPatron() ? "Congé imposé" : "Congé demandé"); });
   var b2 = el("button", { type: "button", class: "btn second", text: estPatron() ? "Noter une absence (maladie, arrêt)" : "Je suis malade / en arrêt" });
   b2.addEventListener("click", function () { formulaireAbsence(sal); });
@@ -669,20 +673,35 @@ function afficherConges() {
   v.appendChild(l);
 }
 
-function formulaireConge(sal, type) {
+/* Congé payé ou sans solde. Côté patron : congé imposé (payé) ou sans solde,
+   tous deux accordés d'office. Côté salarié : une demande, dans les deux cas. */
+function formulaireConge(sal, typeDepart) {
   var demain = iso(plusJours(new Date(), 1));
-  var f = { debut: demain, fin: demain, commentaire: "" };
+  var f = { debut: demain, fin: demain, commentaire: "", type: typeDepart };
+  var patron = estPatron();
   var feuille = $("feuille"); feuille.innerHTML = "";
-  feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: type === "Congé imposé" ? "Congé imposé" : "Demande de congé" }),
+  var titre = el("h2");
+  feuille.appendChild(el("div", { class: "tete" }, [titre,
     el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+  var ch = el("div", { class: "choix" });
+  [[patron ? "Congé imposé" : "Congé demandé", "Congé payé"], ["Congé sans solde", "Sans solde"]].forEach(function (t) {
+    var bt = el("button", { type: "button", "aria-pressed": f.type === t[0] ? "true" : "false", text: t[1] });
+    bt.addEventListener("click", function () { f.type = t[0]; ch.querySelectorAll("button").forEach(function (x) { x.setAttribute("aria-pressed", x === bt ? "true" : "false"); }); maj(); });
+    ch.appendChild(bt);
+  });
+  feuille.appendChild(ch);
   var i1 = el("input", { type: "date", value: f.debut }), i2 = el("input", { type: "date", value: f.fin });
   var calc = el("div", { class: "calcul" }), avert = el("div");
+  var b = el("button", { type: "button", class: "btn" });
   function maj() {
+    var ss = f.type === "Congé sans solde";
+    titre.textContent = patron ? (ss ? "Congé sans solde" : "Congé imposé") : (ss ? "Demande de congé sans solde" : "Demande de congé");
+    b.textContent = patron ? "Poser le congé" : "Envoyer ma demande";
     f.debut = i1.value; f.fin = i2.value < i1.value ? i1.value : i2.value;
     var n = f.debut && f.fin ? joursOuvrables(f.debut, f.fin) : 0;
-    calc.textContent = n + " jour(s) ouvrable(s) décompté(s)";
+    calc.textContent = ss ? n + " jour(s) non payé(s), sans toucher aux congés payés" : n + " jour(s) ouvrable(s) décompté(s) des congés payés";
     avert.innerHTML = "";
-    if (type === "Congé imposé" && f.debut) {
+    if (f.type === "Congé imposé" && f.debut) {
       var delai = (versDate(f.debut) - new Date()) / 86400000;
       if (delai < 30) avert.appendChild(el("p", { class: "avert", text: "⚠ Moins d'un mois avant le départ : pour un congé imposé, le délai de prévenance est d'un mois." }));
     }
@@ -693,16 +712,16 @@ function formulaireConge(sal, type) {
   var iC = el("textarea", { placeholder: "Un mot si besoin" });
   iC.addEventListener("input", function () { f.commentaire = iC.value; });
   feuille.appendChild(el("label", { class: "champ" }, [el("span", { text: "Commentaire" }), iC]));
-  var b = el("button", { type: "button", class: "btn", text: type === "Congé imposé" ? "Poser le congé" : "Envoyer ma demande" });
   b.addEventListener("click", function () {
     if (!f.debut || !f.fin) { toast("Choisis les dates.", "ko"); return; }
-    var n = joursOuvrables(f.debut, f.fin);
+    var n = joursOuvrables(f.debut, f.fin), ss = f.type === "Congé sans solde";
     envoyer({ base: "conges", page_id: "", props: {
-      "Objet": N.titre(type + " " + txt(sal, "Nom") + " du " + f.debut + " au " + f.fin),
-      "Salarié": N.lien(sal.id), "Type": N.choix(type), "Période": N.date(f.debut, f.fin),
-      "Jours ouvrables": N.nombre(n), "Statut": N.choix(type === "Congé imposé" ? "Accordé" : "Demandé"),
+      "Objet": N.titre(f.type + " " + txt(sal, "Nom") + " du " + f.debut + " au " + f.fin),
+      "Salarié": N.lien(sal.id), "Type": N.choix(f.type), "Période": N.date(f.debut, f.fin),
+      "Jours ouvrables": N.nombre(n), "Statut": N.choix(patron ? "Accordé" : "Demandé"),
       "Demandé par": N.choix(role()), "Commentaire": N.texte(f.commentaire)
-    } }, b, type === "Congé imposé" ? "Congé posé. " + nomCourt(sal) + " le voit tout de suite dans son appli." : "Demande de congé bien reçue. En attente de la réponse du patron.");
+    } }, b, patron ? (ss ? "Congé sans solde noté. " : "Congé posé. ") + nomCourt(sal) + " le voit tout de suite dans son appli."
+      : "Demande bien reçue. En attente de la réponse du patron.");
   });
   feuille.appendChild(b);
   maj(); ouvrir();
