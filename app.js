@@ -510,15 +510,29 @@ function ouvrirJour(sal, date, restants) {
   if (j.ferie) feuille.appendChild(el("div", { class: "alerte bleu", text: "Jour férié : " + j.ferie }));
   if (j.absence && !j.rec) feuille.appendChild(el("div", { class: "alerte bleu", text: sel(j.absence, "Type") + " (" + sel(j.absence, "Statut") + ")" }));
 
-  /* Validation demandée à moi */
-  if (j.rec && j.validation === "En attente" && j.modifiePar !== role()) {
-    feuille.appendChild(el("div", { class: "alerte jaune", text: (j.modifiePar === "Patron" ? "Le patron" : j.modifiePar === "Claude" ? "Claude" : "Le salarié") + " a modifié cette journée. Tu valides ?" }));
+  /* Validation demandée à moi : soit je valide, soit je corrige avec ce que je pense
+     être juste. Ma correction part en validation chez l'autre, avec mon motif. */
+  var aMoiDeValider = j.rec && j.validation === "En attente" && j.modifiePar !== role();
+  var correction = false;
+  if (aMoiDeValider) {
+    var qui = j.modifiePar === "Patron" ? "Le patron" : j.modifiePar === "Claude" ? "Claude" : "Le salarié";
+    var propose = j.statut === "Travaillé" ? horaire(j.arrivee) + " – " + horaire(j.depart) + " (pause " + j.pause + " min) = " + hFmt(j.heures) : j.statut;
+    var bloc = el("div", { class: "alerte jaune" }, [el("div", { text: qui + " propose : " + propose })]);
+    if (j.prevu && j.statut === "Travaillé") bloc.appendChild(el("div", { class: "motif", text: "Prévu : " + horaire(j.prevu.arrivee) + " – " + horaire(j.prevu.depart) }));
+    if (txt(j.rec, "Motif")) bloc.appendChild(el("div", { class: "motif", text: "Son motif : " + txt(j.rec, "Motif") }));
+    if (j.commentaire) bloc.appendChild(el("div", { class: "motif", text: "Commentaire : " + j.commentaire }));
+    feuille.appendChild(bloc);
     var bv = el("button", { type: "button", class: "btn vert", text: "Je valide" });
-    var br = el("button", { type: "button", class: "btn rouge", text: "Je refuse" });
+    var bc = el("button", { type: "button", class: "btn second", text: "Je corrige" });
+    var duo = el("div", { class: "duo" }, [bv, bc]);
     bv.addEventListener("click", function () { decider(j, "Validé", bv); });
-    br.addEventListener("click", function () { decider(j, "Refusé", br); });
-    feuille.appendChild(el("div", { class: "duo" }, [bv, br]));
-    feuille.appendChild(el("p", { class: "note", text: "Ou corrige ci-dessous : ta correction repart en validation chez " + autre() + "." }));
+    bc.addEventListener("click", function () {
+      correction = true; duo.hidden = true;
+      [zone, blocHeures, lblCom, lblMotif, bE].forEach(function (x) { x.hidden = false; });
+      bE.textContent = "Envoyer ma correction à " + autre().replace("le ", "");
+      maj(); iMotif.focus();
+    });
+    feuille.appendChild(duo);
   } else if (j.rec && j.validation === "En attente") {
     feuille.appendChild(el("div", { class: "alerte jaune", text: "Modification envoyée, en attente de validation par " + autre() + "." }));
   } else if (j.rec && j.validation === "Refusé") {
@@ -565,14 +579,24 @@ function ouvrirJour(sal, date, restants) {
 
   var iCom = el("textarea", { placeholder: "Un mot si besoin" }, []); iCom.value = f.commentaire;
   iCom.addEventListener("input", function () { f.commentaire = iCom.value; });
-  feuille.appendChild(el("label", { class: "champ" }, [el("span", { text: "Commentaire" }), iCom]));
+  var lblCom = el("label", { class: "champ" }, [el("span", { text: "Commentaire" }), iCom]);
+  feuille.appendChild(lblCom);
+  var iMotif = el("textarea", { placeholder: "Ex. : on a fini à 17h30, pas à 18h" });
+  var lblMotif = el("label", { class: "champ", hidden: "hidden" }, [el("span", { text: "Pourquoi tu corriges (il le verra)" }), iMotif]);
+  feuille.appendChild(lblMotif);
 
   var bE = el("button", { type: "button", class: "btn", text: "Enregistrer" });
-  bE.addEventListener("click", function () { enregistrerJour(sal, j, f, bE); });
+  bE.addEventListener("click", function () {
+    if (correction && !iMotif.value.trim()) { toast("Dis en deux mots pourquoi tu corriges.", "ko"); iMotif.focus(); return; }
+    f.motif = correction ? iMotif.value.trim() : "";
+    enregistrerJour(sal, j, f, bE, correction);
+  });
   feuille.appendChild(bE);
+  /* Tant qu'on n'a pas choisi « Je corrige », le formulaire reste caché : on valide d'abord. */
+  if (aMoiDeValider) [zone, lblCom, bE].forEach(function (x) { x.hidden = true; });
 
   function maj() {
-    blocHeures.hidden = f.statut !== "Travaillé";
+    blocHeures.hidden = f.statut !== "Travaillé" || (aMoiDeValider && !correction);
     var h = duree(f.arrivee, f.depart, f.pause);
     calc.textContent = "Temps de travail : " + hFmt(h);
     avert.innerHTML = "";
@@ -610,17 +634,22 @@ function propsJour(sal, date, f, extra) {
   return p;
 }
 
-function enregistrerJour(sal, j, f, bouton) {
+function enregistrerJour(sal, j, f, bouton, correction) {
   if (!j.rec && identique(j, f)) { fermer(); toast("Rien n'a changé : la journée reste au prévu."); return; }
   var props = propsJour(sal, j.date, f, {
     "Modifié par": N.choix(role()),
     "Validation": N.choix("En attente"),
-    "Motif": N.texte(""),
+    "Motif": N.texte(f.motif || ""),
     "Semaine confirmée salarié": N.case_(false),
     "Semaine confirmée patron": N.case_(false)
   });
   envoyer({ base: "heures", page_id: j.rec ? j.rec.id : "", props: props, cle: sal.id + "|" + j.date }, bouton,
-    "Modification de la journée prise en compte : validation en attente " + autreDu() + ".");
+    correction ? "Correction envoyée : " + autre() + " doit la valider." : "Modification de la journée prise en compte : validation en attente " + autreDu() + ".",
+    correction && S.enchainer ? function () {
+      j.rec.properties["Modifié par"] = { select: { name: role() } };
+      j.rec.properties["Validation"] = { select: { name: "En attente" } };
+      validerSuivant(sal);
+    } : null);
 }
 
 function decider(j, decision, bouton) {
