@@ -225,6 +225,12 @@ function journee(sal, date) {
     date: date, rec: rec, ferie: fer, absence: abs,
     prevu: st ? { arrivee: st[0], depart: st[1], pause: st[2] || 0 } : null
   };
+  /* Avant le premier jour ou après la fin du contrat : rien à saisir, rien à modifier. */
+  if (horsContrat(sal, date)) {
+    j.horsContrat = true; j.statut = "Hors contrat"; j.validation = "Prévu"; j.arrivee = ""; j.depart = "";
+    j.pause = 0; j.heures = 0; j.panier = false; j.rec = null; j.confS = true; j.confP = true;
+    return j;
+  }
   if (rec) {
     j.statut = sel(rec, "Statut jour") || "Travaillé";
     j.arrivee = txt(rec, "Arrivée"); j.depart = txt(rec, "Départ");
@@ -252,6 +258,10 @@ function journee(sal, date) {
   }
   j.heures = (j.statut === "Travaillé" || j.statut === "CFA") ? duree(j.arrivee, j.depart, j.pause) : 0;
   return j;
+}
+function horsContrat(sal, date) {
+  var deb = (dateDe(sal, "Début contrat") || {}).debut, fin = (dateDe(sal, "Fin contrat") || {}).debut;
+  return (deb && date < deb) || (fin && date > fin);
 }
 /* Planning CFA : champ « Planning école » de la fiche salarié, au format
    [["2026-11-16","2026-11-20"], ...]. Les jours d'école se posent tout seuls.
@@ -319,6 +329,8 @@ function badge(j) {
 function ligneJour(sal, j) {
   var d = versDate(j.date), auj = j.date === iso(new Date());
   var detail;
+  if (j.horsContrat) return el("div", { class: "jour off" }, [el("div", { class: "j" }, [JOURS_LONGS[d.getDay()].slice(0, 3) + ".", el("small", { text: joli(d) })]),
+    el("div", { class: "h" }, ["Hors contrat", el("small", { text: "Pas encore embauché ou contrat terminé" })]), el("span")]);
   if (j.statut === "CFA") detail = el("div", { class: "h" }, ["École (CFA)", el("small", { text: horaire(j.arrivee) + " – " + horaire(j.depart) + " · " + hFmt(j.heures) })]);
   else if (j.statut === "Travaillé") detail = el("div", { class: "h" }, [horaire(j.arrivee) + " – " + horaire(j.depart),
     el("small", { text: hFmt(j.heures) + (j.pause ? " · pause " + j.pause + " min" : "") + (j.chantiers ? " · " + j.chantiers : "") })]);
@@ -376,6 +388,35 @@ function afficherAlertes() {
     [n === 1 ? "1 élément attend ta validation" : n + " éléments attendent ta validation", el("span", { text: "Voir ›" })]));
   var att = lire("attente", []);
   if (att.length) z.appendChild(el("div", { class: "alerte bleu", text: att.length + " envoi(s) en attente de réseau. Ils partiront tout seuls." }));
+  avisReponses(vu).forEach(function (a) {
+    var ok = el("button", { type: "button", class: "btn second", text: "OK, vu" });
+    ok.addEventListener("click", function () { var v = lire("vus", {}); v[a.cle] = 1; ecrire("vus", v); afficherAlertes(); });
+    z.appendChild(el("div", { class: "alerte " + (a.ok ? "vert" : "rouge") }, [
+      el("div", { text: a.texte }), a.motif ? el("div", { class: "motif", text: "Motif : " + a.motif }) : null, ok]));
+  });
+}
+/* Réponses à MES modifications et demandes : acceptée ou refusée, avec le motif.
+   Chaque avis s'affiche jusqu'à ce qu'on appuie sur « OK, vu » (mémorisé dans le téléphone). */
+function avisReponses(sal) {
+  var vus = lire("vus", {}), r = [], qui = estPatron() ? "Le salarié" : "Le patron";
+  S.heures.forEach(function (h) {
+    if (rel(h, "Salarié").indexOf(sal.id) < 0 || sel(h, "Modifié par") !== role()) return;
+    var v = sel(h, "Validation"); if (v !== "Validé" && v !== "Refusé") return;
+    var cle = h.id + "|" + v + "|" + (h.last_edited_time || ""); if (vus[cle]) return;
+    var d = (dateDe(h, "Date") || {}).debut, jr = versDate(d);
+    r.push({ cle: cle, ok: v === "Validé", motif: v === "Refusé" ? txt(h, "Motif") : "",
+      texte: (v === "Validé" ? "✅ " : "❌ ") + qui + " a " + (v === "Validé" ? "accepté" : "refusé") + (" ta modification du " + JOURS_LONGS[jr.getDay()].toLowerCase() + " " + joli(jr) + ".").replace("..", ".") });
+  });
+  S.conges.forEach(function (c) {
+    if (rel(c, "Salarié").indexOf(sal.id) < 0 || sel(c, "Demandé par") !== role()) return;
+    var st = sel(c, "Statut"); if (st !== "Accordé" && st !== "Refusé") return;
+    if (estPatron()) return; /* le patron accorde lui-même ce qu'il pose */
+    var cle = c.id + "|" + st + "|" + (c.last_edited_time || ""); if (vus[cle]) return;
+    var p = dateDe(c, "Période") || {};
+    r.push({ cle: cle, ok: st === "Accordé", motif: st === "Refusé" ? txt(c, "Motif") : "",
+      texte: (st === "Accordé" ? "✅ " : "❌ ") + "Ta demande (" + sel(c, "Type").toLowerCase() + " du " + jolis(p.debut) + (p.fin !== p.debut ? " au " + jolis(p.fin) : "") + ") a été " + (st === "Accordé" ? "acceptée." : "refusée.") });
+  });
+  return r;
 }
 
 /* Liste de ce qui attend ma validation : un appui ouvre l'élément. */
@@ -425,7 +466,7 @@ function afficherSemaine() {
   v.appendChild(el("div", { class: "total" + (trop ? " trop" : "") }, [el("span", { text: "Heures travaillées" }), el("span", { text: hFmt(total) + (trop ? " (max 35 h)" : "") })]));
 
   /* confirmation de la semaine */
-  var travailles = js.filter(function (j) { return iso(plusJours(l, 4)) >= j.date; });
+  var travailles = js.filter(function (j) { return iso(plusJours(l, 4)) >= j.date && !j.horsContrat; });
   var confS = travailles.length && travailles.every(function (j) { return j.confS; });
   var confP = travailles.length && travailles.every(function (j) { return j.confP; });
   var enAttente = js.filter(function (j) { return j.rec && j.validation === "En attente"; }).length;
@@ -433,7 +474,7 @@ function afficherSemaine() {
   var c = el("div", { class: "confirm" });
   c.appendChild(el("p", { class: "signes", text: "Salarié : " + (confS ? "semaine confirmée ✓" : "pas encore confirmée") + " · Patron : " + (confP ? "semaine confirmée ✓" : "pas encore confirmée") }));
   var vendredi = plusJours(l, 4);
-  if (!maConf && new Date() >= new Date(vendredi.getFullYear(), vendredi.getMonth(), vendredi.getDate(), 12)) {
+  if (!maConf && travailles.length && new Date() >= new Date(vendredi.getFullYear(), vendredi.getMonth(), vendredi.getDate(), 12)) {
     var b = el("button", { type: "button", class: "btn", text: enAttente ? "Il reste " + enAttente + " journée(s) à valider" : "Je confirme la semaine", disabled: enAttente ? "disabled" : null });
     b.addEventListener("click", function () { confirmerSemaine(sal, js, b); });
     c.appendChild(b);
@@ -471,7 +512,7 @@ function ouvrirJour(sal, date) {
   } else if (j.rec && j.validation === "En attente") {
     feuille.appendChild(el("div", { class: "alerte jaune", text: "Modification envoyée, en attente de validation par " + autre() + "." }));
   } else if (j.rec && j.validation === "Refusé") {
-    feuille.appendChild(el("div", { class: "alerte rouge", text: "Modification refusée. Corrige ou parlez-en ensemble." }));
+    feuille.appendChild(el("div", { class: "alerte rouge", text: "Modification refusée" + (txt(j.rec, "Motif") ? " : " + txt(j.rec, "Motif") : ".") + " Corrige ou parlez-en ensemble." }));
   }
 
   var zone = el("div", { class: "champ" }, [el("span", { text: "Ce jour-là" })]);
@@ -564,6 +605,7 @@ function enregistrerJour(sal, j, f, bouton) {
   var props = propsJour(sal, j.date, f, {
     "Modifié par": N.choix(role()),
     "Validation": N.choix("En attente"),
+    "Motif": N.texte(""),
     "Semaine confirmée salarié": N.case_(false),
     "Semaine confirmée patron": N.case_(false)
   });
@@ -572,13 +614,36 @@ function enregistrerJour(sal, j, f, bouton) {
 }
 
 function decider(j, decision, bouton) {
-  envoyer({ base: "heures", page_id: j.rec.id, props: { "Validation": N.choix(decision) } }, bouton,
-    decision === "Validé" ? "Journée validée." : "Modification refusée. " + (estPatron() ? "Le salarié" : "Le patron") + " le verra en ouvrant l'appli.");
+  if (decision === "Validé") {
+    envoyer({ base: "heures", page_id: j.rec.id, props: { "Validation": N.choix("Validé"), "Motif": N.texte("") } }, bouton,
+      "Journée validée. " + (estPatron() ? "Le salarié" : "Le patron") + " est prévenu.");
+    return;
+  }
+  demanderMotif("Pourquoi tu refuses ?", function (motif) {
+    envoyer({ base: "heures", page_id: j.rec.id, props: { "Validation": N.choix("Refusé"), "Motif": N.texte(motif) } }, null,
+      "Modification refusée. " + (estPatron() ? "Le salarié" : "Le patron") + " verra ton motif.");
+  });
+}
+/* Petite fenêtre qui demande le motif d'un refus (obligatoire). */
+function demanderMotif(titre, suite) {
+  var feuille = $("feuille"); feuille.innerHTML = "";
+  feuille.appendChild(el("div", { class: "tete" }, [el("h2", { text: titre }),
+    el("button", { type: "button", class: "fermer", "aria-label": "Fermer", onclick: fermer }, ["✕"])]));
+  var t = el("textarea", { placeholder: "Ex. : on a fini à 17h, pas à 18h" });
+  feuille.appendChild(el("label", { class: "champ" }, [el("span", { text: "Motif (il sera affiché à l'autre)" }), t]));
+  var b = el("button", { type: "button", class: "btn rouge", text: "Envoyer le refus" });
+  b.addEventListener("click", function () {
+    if (!t.value.trim()) { toast("Écris un motif, même court.", "ko"); t.focus(); return; }
+    etatBouton(b, "envoi", "Envoi en cours…");
+    suite(t.value.trim());
+  });
+  feuille.appendChild(b);
+  ouvrir(); setTimeout(function () { t.focus(); }, 50);
 }
 
 function confirmerSemaine(sal, js, bouton) {
   var champ = estPatron() ? "Semaine confirmée patron" : "Semaine confirmée salarié";
-  var envois = js.map(function (j) {
+  var envois = js.filter(function (j) { return !j.horsContrat; }).map(function (j) {
     var props = {}; props[champ] = N.case_(true);
     if (!j.rec) {
       props = propsJour(sal, j.date, { statut: j.statut, arrivee: j.arrivee, depart: j.depart, pause: j.pause, chantiers: "", commentaire: "", panier: j.panier }, props);
@@ -697,13 +762,16 @@ function afficherConges() {
       el("div", { class: "haut" }, [el("div", {}, [el("div", { class: "quoi", text: sel(x, "Type") }),
         el("div", { class: "quand", text: (p.debut === p.fin ? "le " + jolis(p.debut) : "du " + jolis(p.debut) + " au " + jolis(p.fin)) + (num(x, "Jours ouvrables") ? " · " + num(x, "Jours ouvrables") + " j ouvrables" : "") })]),
         el("span", { class: "etat " + cls, text: st || "—" })]),
-      txt(x, "Commentaire") ? el("div", { class: "quand", text: txt(x, "Commentaire") }) : null
+      txt(x, "Commentaire") ? el("div", { class: "quand", text: txt(x, "Commentaire") }) : null,
+      st === "Refusé" && txt(x, "Motif") ? el("div", { class: "quand", text: "Motif du refus : " + txt(x, "Motif") }) : null
     ]);
     if (st === "Demandé" && estPatron()) {
       var ba = el("button", { type: "button", class: "btn vert", text: /Malade|Arrêt/.test(sel(x, "Type")) ? "Bien noté" : "J'accepte" });
       var br = el("button", { type: "button", class: "btn rouge", text: "Je refuse" });
-      ba.addEventListener("click", function () { envoyer({ base: "conges", page_id: x.id, props: { "Statut": N.choix("Accordé") } }, ba, /Malade|Arrêt/.test(sel(x, "Type")) ? "Absence notée." : "Congé accordé. " + nomCourt(sal) + " le verra en ouvrant l'appli."); });
-      br.addEventListener("click", function () { envoyer({ base: "conges", page_id: x.id, props: { "Statut": N.choix("Refusé") } }, br, "Demande refusée."); });
+      ba.addEventListener("click", function () { envoyer({ base: "conges", page_id: x.id, props: { "Statut": N.choix("Accordé"), "Motif": N.texte("") } }, ba, /Malade|Arrêt/.test(sel(x, "Type")) ? "Absence notée." : "Congé accordé. " + nomCourt(sal) + " le verra en ouvrant l'appli."); });
+      br.addEventListener("click", function () { demanderMotif("Pourquoi tu refuses ce congé ?", function (motif) {
+        envoyer({ base: "conges", page_id: x.id, props: { "Statut": N.choix("Refusé"), "Motif": N.texte(motif) } }, null, "Demande refusée. " + nomCourt(sal) + " verra ton motif.");
+      }); });
       ligne.appendChild(el("div", { class: "duo" }, [ba, br]));
     }
     if (st === "Demandé" && !estPatron() && sel(x, "Demandé par") === "Salarié") {

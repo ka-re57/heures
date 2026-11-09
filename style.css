@@ -83,6 +83,9 @@ h2{font-size:1.35rem}
 .alerte.jaune{background:var(--jaune-fond);color:var(--jaune)}
 .alerte.lien{display:flex;justify-content:space-between;align-items:center;width:100%;border:0;font:inherit;font-weight:700;cursor:pointer;text-align:left}
 .alerte.rouge{background:var(--rouge-fond);color:var(--rouge)}
+.alerte.vert{background:var(--vert-fond);color:var(--vert)}
+.alerte .motif{font-weight:500;margin-top:4px}
+.alerte .btn{margin-top:10px;padding:10px}
 .alerte.bleu{background:var(--bleu-fond);color:var(--bleu)}
 
 /* Boutons d'action : ils changent d'état au clic */
