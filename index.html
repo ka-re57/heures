@@ -1,1 +1,56 @@
-<!doctype html><html lang="fr"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Heures KA-RÉ</title><body style="font-family:system-ui;padding:24px"><h1>Heures KA-RÉ</h1><p>Page test du 08/11/2026. L&#39;appli arrive ici.</p></body></html>
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#e0661a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Heures">
+<title>Heures KA-RÉ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="barre">
+  <img src="logo.png" alt="KA-RÉ" class="logo">
+  <div class="qui" id="qui"></div>
+  <button type="button" class="icone" id="btnMaj" aria-label="Actualiser" hidden>↻</button>
+</header>
+
+<main id="app">
+  <section id="ecranCode" class="ecran" hidden>
+    <h1>Bonjour</h1>
+    <p class="doux">Tape ton code à 4 chiffres. Tu ne le feras qu'une fois sur ce téléphone.</p>
+    <div class="points" id="points"><span></span><span></span><span></span><span></span></div>
+    <div class="clavier" id="clavier"></div>
+    <p class="erreur" id="erreurCode" aria-live="polite"></p>
+  </section>
+
+  <section id="ecranAppli" class="ecran" hidden>
+    <nav class="salaries" id="salaries" hidden></nav>
+    <div class="onglets" role="tablist">
+      <button type="button" role="tab" data-onglet="semaine" aria-selected="true">Heures</button>
+      <button type="button" role="tab" data-onglet="conges" aria-selected="false">Congés et absences</button>
+    </div>
+    <div id="alertes"></div>
+    <div id="vueSemaine"></div>
+    <div id="vueConges" hidden></div>
+  </section>
+
+  <section id="ecranChargement" class="ecran centre">
+    <div class="rond"></div>
+    <p class="doux">Chargement…</p>
+  </section>
+</main>
+
+<div class="fond" id="fond" hidden></div>
+<div class="feuille" id="feuille" hidden role="dialog" aria-modal="true"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
